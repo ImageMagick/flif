@@ -36,7 +36,7 @@ struct CRC32KTable {
     CRC32KTable();
 };
 
-extern CRC32KTable crc32k;
+extern const CRC32KTable crc32k;
 
 #define Crc32Lookup crc32k.tab
 
@@ -1009,7 +1009,7 @@ CRC32KTable::CRC32KTable() :
 #endif
 
 
-static CRC32KTable crc32k;
+const CRC32KTable crc32k;
 
 
 // test code below deleted
