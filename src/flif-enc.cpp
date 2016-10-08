@@ -192,7 +192,7 @@ void flif_encode_FLIF2_inner(IO& io, Rac& rac, std::vector<Coder> &coders, const
     metaCoder.write_int(0, 1, (default_order? 1 : 0)); // we're using the default zoomlevel/plane ordering
     for (int p=0; p<nump; p++) metaCoder.write_int(-1, MAX_PREDICTOR, the_predictor[p]);
     for (int i = 0; i < plane_zoomlevels(images[0], beginZL, endZL); i++) {
-      std::pair<int, int> pzl = plane_zoomlevel(images[0], beginZL, endZL, i);
+      std::pair<int, int> pzl = plane_zoomlevel(images[0], beginZL, endZL, i, ranges);
       int p = pzl.first;
       int z = pzl.second;
       if (!default_order) metaCoder.write_int(0, nump-1, p);
@@ -302,7 +302,7 @@ void flif_encode_FLIF2_interpol_zero_alpha(Images &images, const ColorRanges * r
        image.set(2,0,0,greys[2]);
      }
      for (int i = 0; i < plane_zoomlevels(image, beginZL, endZL); i++) {
-      std::pair<int, int> pzl = plane_zoomlevel(image, beginZL, endZL, i);
+      std::pair<int, int> pzl = plane_zoomlevel(image, beginZL, endZL, i, ranges);
       int p = pzl.first;
       int z = pzl.second;
       if (p >= 3) continue;
@@ -441,7 +441,7 @@ void flif_make_lossy_interlaced(Images &images, const ColorRanges * ranges, int 
 
     // preprocessing step: compensate for anticipated loss in final zoomlevels (assuming predictor 0)
     for (int i = 0; i < plane_zoomlevels(images[0], beginZL, endZL); i++) {
-      std::pair<int, int> pzl = plane_zoomlevel(images[0], beginZL, endZL, i);
+      std::pair<int, int> pzl = plane_zoomlevel(images[0], beginZL, endZL, i, ranges);
       int p = pzl.first;
       int z = pzl.second;
       if (z>0) continue;
@@ -489,7 +489,7 @@ void flif_make_lossy_interlaced(Images &images, const ColorRanges * ranges, int 
           }
     }
     for (int i = 0; i < plane_zoomlevels(images[0], beginZL, endZL); i++) {
-      std::pair<int, int> pzl = plane_zoomlevel(images[0], beginZL, endZL, i);
+      std::pair<int, int> pzl = plane_zoomlevel(images[0], beginZL, endZL, i, ranges);
       int p = pzl.first;
       int z = pzl.second;
       if (z!=1) continue;
@@ -533,7 +533,7 @@ void flif_make_lossy_interlaced(Images &images, const ColorRanges * ranges, int 
 
     // add loss
     for (int i = 0; i < plane_zoomlevels(images[0], beginZL, endZL); i++) {
-      std::pair<int, int> pzl = plane_zoomlevel(images[0], beginZL, endZL, i);
+      std::pair<int, int> pzl = plane_zoomlevel(images[0], beginZL, endZL, i, ranges);
       int p = pzl.first;
       int z = pzl.second;
       if (ranges->min(p) >= ranges->max(p)) continue;
@@ -624,7 +624,6 @@ void flif_make_lossy_interlaced(Images &images, const ColorRanges * ranges, int 
     }
 }
 
-
 template<typename IO, typename BitChance, typename Rac> void flif_encode_tree(IO& io, Rac &rac, const ColorRanges *ranges, const std::vector<Tree> &forest, const flifEncoding encoding)
 {
     for (int p = 0; p < ranges->numPlanes(); p++) {
@@ -698,12 +697,37 @@ void flif_encode_main(RacOut<IO>& rac, IO& io, Images &images, flifEncoding enco
 }
 
 template <typename IO>
+void write_big_endian_varint(IO& io, unsigned long number, bool done = true) {
+    if (number < 128) {
+        if (done) io.fputc(number);
+        else io.fputc(number + 128);
+    } else {
+        unsigned long lsb = (number & 127);
+        number >>= 7;
+        write_big_endian_varint(io, number, false);
+        write_big_endian_varint(io, lsb, done);
+    }
+}
+
+template <typename IO>
+void write_chunk(IO& io, MetaData& metadata) {
+//    printf("chunk: %s\n", metadata.name);
+//    printf("chunk length: %lu\n", metadata.length);
+    io.fputs(metadata.name);
+    unsigned long length = metadata.length;
+    write_big_endian_varint(io, length);
+    for(unsigned long i = 0; i < length; i++) {
+        io.fputc(metadata.contents[i]);
+    }
+}
+
+
+template <typename IO>
 bool flif_encode(IO& io, Images &images, std::vector<std::string> transDesc, flifEncoding encoding,
                  int learn_repeats, int acb, int palette_size, int lookback,
                  int divisor=CONTEXT_TREE_COUNT_DIV, int min_size=CONTEXT_TREE_MIN_SUBTREE_SIZE, int split_threshold=CONTEXT_TREE_SPLIT_THRESHOLD,
                  int cutoff=2, int alpha=19, int crc_check=-1, int loss=0, int predictor[]=NULL, int invisible_predictor=2) {
 
-    io.fputs("FLIF");  // bytes 1-4 are fixed magic
     int numPlanes = images[0].numPlanes();
     int numFrames = images.size();
     bool adaptive = (loss<0);
@@ -716,13 +740,15 @@ bool flif_encode(IO& io, Images &images, std::vector<std::string> transDesc, fli
         images.pop_back();
     }
 
+
+    io.fputs("FLIF");  // bytes 1-4 are fixed magic
     // byte 5 encodes color type, interlacing, animation
     // 128 64 32 16 8 4 2 1
     //                                                Gray8    RGB24    RGBA32    Gray16   RGB48    RGBA64
     //      0  1  1           = scanlines, still     (FLIF11,  FLIF31,  FLIF41,   FLIF12,  FLIF32,  FLIF42)
     //      1  0  0           = interlaced, still    (FLIFA1,  FLIFC1,  FLIFD1,   FLIFA2,  FLIFC2,  FLIFD2)
-    //      1  0  1           = scanlines, animated  (FLIFQx1, FLIFSx1, FLIFTx1,  FLIFQx2, FLIFSx2, FLIFTx2)   x=nb_frames
-    //      1  1  0           = interlaced, animated (FLIFax1, FLIFcx1, FLIFdx1,  FLIFax2, FLIFcx2, FLIFdx2)   x=nb_frames
+    //      1  0  1           = scanlines, animated  (FLIFQ1,  FLIFS1,  FLIFT1,   FLIFQ2,  FLIFS2,  FLIFT2)
+    //      1  1  0           = interlaced, animated (FLIFa1,  FLIFc1,  FLIFd1,   FLIFa2,  FLIFc2,  FLIFd2)
     //      0  0  0           = interlaced, still, non-default interlace order (not yet implemented)
     //      1  1  1           = interlaced, animated, non-default interlace order (not yet implemented)
     //              0         = RGB(A) color model (can be transformed to other color spaces like YCoCg/YCbCr)
@@ -736,19 +762,7 @@ bool flif_encode(IO& io, Images &images, std::vector<std::string> transDesc, fli
     if (numFrames>1) c += 32;
     io.fputc(c);
 
-    // for animations: byte 6 = number of frames (or bytes 7 and 8 if nb_frames >= 255)
-    if (numFrames>1) {
-        if (numFrames<255) io.fputc((char)numFrames);
-        else if (numFrames<0xffff) {
-            io.fputc(0xff);
-            io.fputc(numFrames >> 8);
-            io.fputc(numFrames & 0xff);
-        } else {
-            e_printf("Too many frames!\n");
-        }
-    }
-
-    // next byte (byte 6 for still images, byte 7 or 9 for animations) encodes the bit depth:
+    // next byte (byte 6) encodes the bit depth:
     // '1' for 8 bits (1 byte) per channel, '2' for 16 bits (2 bytes) per channel, '0' for custom bit depth
 
     c='1';
@@ -757,20 +771,30 @@ bool flif_encode(IO& io, Images &images, std::vector<std::string> transDesc, fli
     io.fputc(c);
 
     Image& image = images[0];
-    assert(image.cols() <= 0xFFFF);
-    // next 4 bytes (bytes 7-10 for still images, bytes 8-11 or 10-13 for animations) encode the width and height:
-    // first the width (as a big-endian unsigned 16 bit number), then the height
-    io.fputc(image.cols() >> 8);
-    io.fputc(image.cols() & 0xFF);
-    assert(image.rows() <= 0xFFFF);
-    io.fputc(image.rows() >> 8);
-    io.fputc(image.rows() & 0xFF);
+
+    // encode width and height in a variable number of bytes
+    write_big_endian_varint(io, image.cols() - 1);
+    write_big_endian_varint(io, image.rows() - 1);
+
+    // for animations: number of frames
+    if (numFrames>1) {
+        write_big_endian_varint(io, numFrames - 2);
+    }
+
+    for(size_t i=0; i<images[0].metadata.size(); i++) {
+            write_chunk(io,images[0].metadata[i]);
+            v_printf(3,"Encoded metadata chunk: %s\n",images[0].metadata[i].name);
+    }
+
+    // marker to indicate FLIF version (version 0 aka FLIF16 in this case)
+    io.fputc(0);
+
 
     RacOut<IO> rac(io);
     //SimpleSymbolCoder<FLIFBitChanceMeta, RacOut<IO>, 18> metaCoder(rac);
     UniformSymbolCoder<RacOut<IO>> metaCoder(rac);
 
-    metaCoder.write_int(0,1,0); // FLIF version: FLIF16
+//    metaCoder.write_int(0,1,0); // FLIF version: FLIF16
 
     v_printf(2," (%ux%u", images[0].cols(), images[0].rows());
     for (int p = 0; p < numPlanes; p++) {
@@ -819,7 +843,8 @@ bool flif_encode(IO& io, Images &images, std::vector<std::string> transDesc, fli
     int tcount=0;
     v_printf(3,"Transforms: ");
 
-    for (unsigned int i=0; i<transDesc.size(); i++) {
+    try {
+      for (unsigned int i=0; i<transDesc.size(); i++) {
         auto trans = create_transform<IO>(transDesc[i]);
         auto previous_range = rangesList.back().get();
         if (transDesc[i] == "Palette" || transDesc[i] == "Palette_Alpha") trans->configure(palette_size);
@@ -839,6 +864,10 @@ bool flif_encode(IO& io, Images &images, std::vector<std::string> transDesc, fli
             rangesList.push_back(std::unique_ptr<const ColorRanges>(trans->meta(images, previous_range)));
             trans->data(images);
         }
+      }
+    } catch (std::bad_alloc& ba) {
+         e_printf("Error: could not allocate enough memory for transforms. Aborting. Try -E0.\n");
+         return false;
     }
     if (tcount==0) v_printf(3,"none\n"); else v_printf(3,"\n");
     rac.write_bit(false);
@@ -892,6 +921,7 @@ bool flif_encode(IO& io, Images &images, std::vector<std::string> transDesc, fli
       v_printf(3,"Introducing loss to improve compression. Amount of loss: %i\n", loss);
       switch(encoding) {
         case flifEncoding::nonInterlaced:
+            // this is probably a bad idea, the artifacts are ugly
             flif_make_lossy_scanlines(images,ranges,loss,adaptive,adaptive_map);
             if (alphazero && ranges->numPlanes() > 3 && ranges->min(3) <= 0) flif_encode_scanlines_interpol_zero_alpha(images, ranges);
             break;
@@ -935,11 +965,12 @@ bool flif_encode(IO& io, Images &images, std::vector<std::string> transDesc, fli
     }
 
     if (crc_check && !loss && (crc_check>0 || io.ftell() > 100)) {
-      //v_printf(2,"Writing checksum: %X\n", checksum);
+      v_printf(2,"Writing checksum: %X\n", checksum);
       metaCoder.write_int(0,1,1);
       metaCoder.write_int(16, (checksum >> 16) & 0xFFFF);
       metaCoder.write_int(16, checksum & 0xFFFF);
     } else {
+      v_printf(2,"Not writing checksum\n");
       metaCoder.write_int(0,1,0); // don't write checksum for tiny images or when asked not to
     }
     rac.flush();

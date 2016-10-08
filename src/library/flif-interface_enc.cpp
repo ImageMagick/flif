@@ -17,6 +17,7 @@
 */
 
 #include "flif-interface-private_enc.hpp"
+#include "flif-interface_common.cpp"
 
 FLIF_ENCODER::FLIF_ENCODER()
 : interlaced(1)

@@ -21,6 +21,7 @@ limitations under the License.
 #include <vector>
 #include <assert.h>
 #include <stdint.h>
+#include <string.h>
 #include <vector>
 #include <memory>
 #include "crc32k.hpp"
@@ -28,6 +29,9 @@ limitations under the License.
 #include "../io.hpp"
 #include "../config.h"
 #include "../compiler-specific.hpp"
+
+
+#include "../../extern/lodepng.h"
 
 #ifdef SUPPORT_HDR
 typedef int32_t ColorVal;  // used in computations
@@ -117,7 +121,8 @@ struct EightColorVals {
     }
     void store(int32_t *p) const {}
     void store(uint16_t *p) const {}
-    int operator[](int i) const{ return vec.m128i_i16[i]; }
+	short& operator[](int i) { return vec.m128i_i16[i]; }
+	short operator[](int i) const { return vec.m128i_i16[i]; }
     EightColorVals VCALL operator+(EightColorVals b) { return EightColorVals(_mm_add_epi16(vec,b.vec)); }
     EightColorVals VCALL operator-(EightColorVals b) { return EightColorVals(_mm_sub_epi16(vec,b.vec)); }
     EightColorVals VCALL operator-() { return EightColorVals(_mm_sub_epi16(_mm_setzero_si128(),vec)); }
@@ -223,12 +228,18 @@ template <typename pixel_t> class Plane final : public GeneralPlane {
 
 public:
     Plane(uint32_t w, uint32_t h, ColorVal color=0, int scale = 0) : data_vec(PAD(SCALED(w)*SCALED(h)), color), width(SCALED(w)), height(SCALED(h)), s(scale) {
+      // Align only when required. The emscripten port doesn't work with padded alignment and doesn't support SIMD, so
+      // `USE_SIMD` is a good condition for alignment, for now.
+#ifdef USE_SIMD
         //size_t space = data_vec.size()*sizeof(pixel_t);
         void *ptr = data_vec.data();
         //std::align (C++11) is not in GCC or Clang (the versions used by Travis-CI at least) for some stupid reason
         //data = static_cast<pixel_t*>(std::align(16,16,ptr,space));
         uintptr_t diff = (uintptr_t)ptr % 16;
         data = static_cast<pixel_t*>((diff == 0) ? ptr : ((char*)ptr) + (16-diff));
+#else
+        data = data_vec.data();
+#endif
         assert(data != nullptr);
     }
     void clear() {
@@ -237,7 +248,7 @@ public:
     void set(const uint32_t r, const uint32_t c, const ColorVal x) override {
 //        const uint32_t sr = r>>s, sc = c>>s;
         const uint32_t sr = r, sc = c;
-        assert(s==0);
+//        assert(s==0);  // can also be used when using downscaled plane; in this case you have to make sure to use downscaled r,c !
         assert(sr<height); assert(sc<width);
         data[sr*width + sc] = x;
     }
@@ -245,7 +256,7 @@ public:
 //        if (r >= height || r < 0 || c >= width || c < 0) {printf("OUT OF RANGE!\n"); return 0;}
 //        const uint32_t sr = r>>s, sc = c>>s;
         const uint32_t sr = r, sc = c;
-        assert(s==0);
+//        assert(s==0);  // can also be used when using downscaled plane; in this case you have to make sure to use downscaled r,c !
         assert(sr<height); assert(sc<width);
         return data[sr*width + sc];
     }
@@ -310,11 +321,11 @@ public:
 #endif
     void set(const int z, const uint32_t r, const uint32_t c, const ColorVal x) override {
 //        set(r*zoom_rowpixelsize(z),c*zoom_colpixelsize(z),x);
-         data_vec[(r*zoom_rowpixelsize(z)>>s)*width + (c*zoom_colpixelsize(z)>>s)] = x;
+         data[(r*zoom_rowpixelsize(z)>>s)*width + (c*zoom_colpixelsize(z)>>s)] = x;
     }
     ColorVal get(const int z, const uint32_t r, const uint32_t c) const override {
 //        return get(r*zoom_rowpixelsize(z),c*zoom_colpixelsize(z));
-        return data_vec[(r*zoom_rowpixelsize(z)>>s)*width + (c*zoom_colpixelsize(z)>>s)];
+        return data[(r*zoom_rowpixelsize(z)>>s)*width + (c*zoom_colpixelsize(z)>>s)];
     }
     void normalize_scale() override { s = 0; }
 
@@ -330,7 +341,7 @@ public:
             for (pixel_t& x : data) x = swap(x);
         }
 #endif
-        uint32_t result = crc32_fast(&data_vec[0], width*height*sizeof(pixel_t), previous_crc32);
+        uint32_t result = crc32_fast(&data[0], width*height*sizeof(pixel_t), previous_crc32);
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
         // make the buffer big endian again
         if (sizeof(pixel_t) == 2) {
@@ -416,6 +427,17 @@ void copy_row_range(plane_t &plane, const GeneralPlane &other, const uint32_t r,
     }
 }
 
+struct MetaData {
+    char name[5];               // name of the chunk (every chunk is assumed to be unique, 4 ascii letters plus terminating 0)
+    size_t length;              // length of the chunk contents
+    std::vector<unsigned char> contents;
+};
+
+struct metadata_options {
+    bool icc;
+    bool exif;
+    bool xmp;
+};
 
 class Image {
     std::unique_ptr<GeneralPlane> planes[5]; // Red/Y, Green/Co, Blue/Cg, Alpha, Frame-Lookback(animation only)
@@ -434,6 +456,7 @@ class Image {
       operator=(other);
     }
 
+
     Image& operator=(const Image& other) {
       width = other.width;
       height = other.height;
@@ -444,6 +467,7 @@ class Image {
 #ifdef SUPPORT_HDR
       depth = other.depth;
 #endif
+      metadata = other.metadata;
       palette = other.palette;
       frame_delay = other.frame_delay;
       col_begin = other.col_begin;
@@ -469,12 +493,13 @@ class Image {
       if (p>4) planes[4] = make_unique<Plane<ColorVal_intern_8>>(width, height, 0, scale); // FRA
       }
       for(int p=0; p<num; p++)
-          for (uint32_t r=0; r<height; r++)
-             for (uint32_t c=0; c<width; c++)
+          for (uint32_t r=0; r<SCALED(height); r++)
+             for (uint32_t c=0; c<SCALED(width); c++)
                  set(p,r,c,other.operator()(p,r,c));
 
       return *this;
     }
+
 
 
 public:
@@ -485,6 +510,7 @@ public:
     std::vector<uint32_t> col_end;
     int seen_before;
     bool fully_decoded;
+    std::vector<MetaData> metadata;
 
     Image(uint32_t width, uint32_t height, ColorVal min, ColorVal max, int planes, int s=0) : scale(s) {
         init(width, height, min, max, planes);
@@ -523,6 +549,7 @@ public:
       depth = other.depth;
       other.depth = 0;
 #endif
+      metadata = other.metadata;
 
       other.width = other.height = 0;
       other.minval = other.maxval = 0;
@@ -542,15 +569,55 @@ public:
       return *this;
     }
 
+    // downsampling copy constructor
+    Image(const Image& other, int new_w, int new_h) {
+      width = new_w;
+      height = new_h;
+      minval = other.minval;
+      maxval = other.maxval;
+      num = other.num;
+      scale = 0;
+#ifdef SUPPORT_HDR
+      depth = other.depth;
+#endif
+      metadata = other.metadata;
+      palette = other.palette;
+      frame_delay = other.frame_delay;
+      col_begin = other.col_begin;
+      col_end = other.col_end;
+      seen_before = other.seen_before;
+      fully_decoded = other.fully_decoded;
+      clear();
+      {
+      int p=num;
+      if (depth <= 8) {
+        if (p>0) planes[0] = make_unique<Plane<ColorVal_intern_8>>(width, height, 0, scale); // R,Y
+        if (p>1) planes[1] = make_unique<Plane<ColorVal_intern_16>>(width, height, 0, scale); // G,I
+        if (p>2) planes[2] = make_unique<Plane<ColorVal_intern_16>>(width, height, 0, scale); // B,Q
+        if (p>3) planes[3] = make_unique<Plane<ColorVal_intern_8>>(width, height, 0, scale); // A
+#ifdef SUPPORT_HDR
+      } else {
+        if (p>0) planes[0] = make_unique<Plane<ColorVal_intern_16u>>(width, height, 0, scale); // R,Y
+        if (p>1) planes[1] = make_unique<Plane<ColorVal_intern_32>>(width, height, 0, scale); // G,I
+        if (p>2) planes[2] = make_unique<Plane<ColorVal_intern_32>>(width, height, 0, scale); // B,Q
+        if (p>3) planes[3] = make_unique<Plane<ColorVal_intern_16u>>(width, height, 0, scale); // A
+#endif
+      }
+      if (p>4) planes[4] = make_unique<Plane<ColorVal_intern_8>>(width, height, 0, scale); // FRA
+      }
+      // this is stupid downsampling
+      // TODO: replace this with more accurate downscaling
+      for(int p=0; p<num; p++)
+          for (uint32_t r=0; r<height; r++)
+             for (uint32_t c=0; c<width; c++)
+                 set(p,r,c,other.operator()(p,r*other.height/height,c*other.width/width));
+    }
+
     bool init(uint32_t w, uint32_t h, ColorVal min, ColorVal max, int p) {
       width = w;
       height = h;
       minval = min;
       maxval = max;
-      col_begin.clear();
-      col_begin.resize(height,0);
-      col_end.clear();
-      col_end.resize(height,width);
       num = p;
       seen_before = -1;
 #ifdef SUPPORT_HDR
@@ -568,6 +635,10 @@ public:
 
       clear();
       try {
+      col_begin.clear();
+      col_begin.resize(height,0);
+      col_end.clear();
+      col_end.resize(height,width);
       if (depth <= 8) {
         if (p>0) planes[0] = make_unique<Plane<ColorVal_intern_8>>(width, height, 0, scale); // R,Y
         if (p>1) planes[1] = make_unique<Plane<ColorVal_intern_16>>(width, height, 0, scale); // G,I
@@ -715,7 +786,7 @@ public:
     }
 
 #ifdef HAS_ENCODER
-    bool load(const char *name);
+    bool load(const char *name, metadata_options &options);
 #endif
     bool save(const char *name) const;
 
@@ -736,6 +807,7 @@ public:
     ColorVal max(int) const { return maxval; }
     uint32_t rows() const { return height; }
     uint32_t cols() const { return width; }
+    int getscale() const { return scale; }
 
     // access pixel by zoomlevel coordinate
     uint32_t zoom_rowpixelsize(int zoomlevel) const {
@@ -815,6 +887,41 @@ public:
     }
     void abort_decoding() {
         width = 0; // this is used to signal the decoder to stop
+    }
+
+    bool get_metadata(const char * chunkname, unsigned char ** data, size_t * length) const {
+        for(size_t i=0; i<metadata.size(); i++) {
+            if (!strncmp(metadata[i].name, chunkname, 4)) {
+                *data = NULL;
+                *length = 0;
+//                lodepng_zlib_decompress(data, length, metadata[i].contents.data(), metadata[i].length, &lodepng_default_decompress_settings);
+                lodepng_inflate(data, length, metadata[i].contents.data(), metadata[i].length, &lodepng_default_decompress_settings);
+                return true;
+            }
+        }
+        return false;  // metadata not found
+    }
+    void free_metadata(unsigned char * data) const {
+        if(data) {
+#ifdef LODEPNG_COMPILE_ALLOCATORS
+            free(data);
+#else
+            lodepng_free(data);
+#endif // !LODEPNG_COMPILE_ALLOCATORS            
+        }
+    }
+    void set_metadata(const char * chunkname, const unsigned char * data, size_t length) {
+        MetaData foo;
+        strcpy(foo.name, chunkname);
+        unsigned char * compressed = NULL;
+        size_t compressed_length = 0;
+//        lodepng_zlib_compress(&compressed, &compressed_length, data, length, &lodepng_default_compress_settings);
+        lodepng_deflate(&compressed, &compressed_length, data, length, &lodepng_default_compress_settings);
+        foo.contents.resize(compressed_length);
+        memcpy(foo.contents.data(), compressed, compressed_length);
+        free(compressed);
+        foo.length = compressed_length;
+        metadata.push_back(foo);
     }
 
 };
