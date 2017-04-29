@@ -39,6 +39,10 @@ public:
         if (p >= 3) { mi=min(p); ma=max(p); }
         else ranges->minmax(p, pp, mi, ma);
     }
+    void snap(const int p, const prevPlanes &pp, ColorVal &minv, ColorVal &maxv, ColorVal &v) const override {
+        if (p >= 3) ColorRanges::snap(p,pp,minv,maxv,v);
+        else ranges->snap(p,pp,minv,maxv,v);
+    }
     const ColorRanges* previous() const override { return ranges; }
 };
 
@@ -64,7 +68,7 @@ protected:
         }
         int lookback = (int)images.size()-1;
         if (lookback > max_lookback) lookback=max_lookback;
-        return new ColorRangesFC(lookback, (srcRanges->numPlanes() == 4 ? srcRanges->min(3) : 255), (srcRanges->numPlanes() == 4 ? srcRanges->max(3) : 255), srcRanges);
+        return new ColorRangesFC(lookback, (srcRanges->numPlanes() == 4 ? srcRanges->min(3) : 1), (srcRanges->numPlanes() == 4 ? srcRanges->max(3) : 1), srcRanges);
     }
 
     bool load(const ColorRanges *srcRanges, RacIn<IO> &rac) override {
@@ -149,8 +153,8 @@ protected:
     }
 #endif
 
-    void configure(int setting) override { user_max_lookback=nb_frames=setting; }
-    void invData(Images &images) const override {
+    void configure(const int setting) override { user_max_lookback=nb_frames=setting; }
+    void invData(Images &images, uint32_t strideCol, uint32_t strideRow) const override {
         // most work has to be done on the fly in the decoder, this is just some cleaning up
         for (Image& image : images) image.drop_frame_lookbacks();
         if (was_flat) for (Image& image : images) image.drop_alpha();

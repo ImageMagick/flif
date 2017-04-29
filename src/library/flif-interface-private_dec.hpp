@@ -32,14 +32,15 @@ struct FLIF_DECODER
     int32_t num_loops();
     FLIF_IMAGE* get_image(size_t index);
 
-    int32_t quality;
-    uint32_t scale;
+    flif_options options;
     void* callback;
+    void* user_data;
     int32_t first_quality;
-    uint32_t rw;
-    uint32_t rh;
-    int32_t crc_check;
-    bool fit;
+    ~FLIF_DECODER() {
+        // get rid of palettes
+        if (internal_images.size()) internal_images[0].clear();
+        if (images.size()) images[0].clear();
+    }
 
 private:
     Images internal_images;

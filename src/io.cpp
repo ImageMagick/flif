@@ -34,7 +34,12 @@ void e_printf(const char *format, ...) {
     va_end(args);
 }
 
+#ifdef DEBUG
+static int verbosity = 10;
+#else
 static int verbosity = 1;
+#endif
+static FILE * my_stdout = stdout;
 void increase_verbosity(int how_much) {
     verbosity += how_much;
 }
@@ -47,22 +52,25 @@ void v_printf(const int v, const char *format, ...) {
     if (verbosity < v) return;
     va_list args;
     va_start(args, format);
-    vfprintf(stdout, format, args);
-    fflush(stdout);
+    vfprintf(my_stdout, format, args);
+    fflush(my_stdout);
     va_end(args);
 }
 
 void v_printf_tty(const int v, const char *format, ...) {
     if (verbosity < v) return;
 #ifdef _WIN32
-    if(!_isatty(_fileno(stdout))) return;
+    if(!_isatty(_fileno(my_stdout))) return;
 #else
-    if(!isatty(STDOUT_FILENO)) return;
+    if(!isatty(fileno(my_stdout))) return;
 #endif
     va_list args;
     va_start(args, format);
-    vfprintf(stdout, format, args);
-    fflush(stdout);
+    vfprintf(my_stdout, format, args);
+    fflush(my_stdout);
     va_end(args);
 }
 
+void redirect_stdout_to_stderr() {
+    my_stdout = stderr;
+}
