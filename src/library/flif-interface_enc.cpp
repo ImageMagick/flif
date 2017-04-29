@@ -19,7 +19,6 @@
 #ifdef HAS_ENCODER
 
 #include "flif-interface-private_enc.hpp"
-#include "flif-interface_common.cpp"
 
 FLIF_ENCODER::FLIF_ENCODER()
 : options(FLIF_DEFAULT_OPTIONS)
