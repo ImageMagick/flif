@@ -1,17 +1,9 @@
 #include "winver.h"
-
-#define THIS_PROJECT_VERSION_NUM		0,3,0
-#define THIS_PROJECT_VERSION_STRING		"0.3.0 (2017-04-28)"
-
-/////////////////////////////////////////////////////////////////////////////
-//
-// Version
-//
-/////////////////////////////////////////////////////////////////////////////
+#include "ImageMagick.version.h"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION THIS_PROJECT_VERSION_NUM
- PRODUCTVERSION THIS_PROJECT_VERSION_NUM
+ FILEVERSION DELEGATE_VERSION_NUM
+ PRODUCTVERSION DELEGATE_VERSION_NUM
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -30,8 +22,8 @@ BEGIN
             VALUE "FileDescription", "ImageMagick library and utility programs\0"
             VALUE "OriginalFilename", "FLIF\0"
             VALUE "InternalName", "ImageMagick\0"
-            VALUE "FileVersion", THIS_PROJECT_VERSION_STRING "\0"
-            VALUE "ProductVersion", THIS_PROJECT_VERSION_STRING "\0"
+            VALUE "FileVersion", DELEGATE_VERSION_STRING "\0"
+            VALUE "ProductVersion", DELEGATE_VERSION_STRING "\0"
             VALUE "CompanyName", "Jon Sneyers & Pieter Wuille.\0"
             VALUE "LegalCopyright", "Copyright 2010-2016, Jon Sneyers & Pieter Wuille.\0"
             VALUE "Comments", "https://github.com/FLIF-hub/FLIF\0"
