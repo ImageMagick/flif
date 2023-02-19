@@ -167,8 +167,8 @@ void downsample(const int width, const int height, int target_w, int target_h, I
 
 
 template<typename IO, typename Rac, typename Coder>
-bool flif_decode_scanlines_inner(IO &io, Rac &rac, std::vector<Coder> &coders, Images &images, const ColorRanges *ranges, flif_options &options,
-                                 std::vector<Transform<IO>*> &transforms, callback_t callback, void *user_data, Images &partial_images) {
+bool flif_decode_scanlines_inner(IO &io, FLIF_UNUSED(Rac &rac), std::vector<Coder> &coders, Images &images, const ColorRanges *ranges, flif_options &options,
+                                 std::vector<Transform<IO>*> &transforms, callback_t callback, void *user_data, Images &partial_images, Progress &progress) {
     const int nump = images[0].numPlanes();
     const bool alphazero = images[0].alpha_zero_special;
     const bool FRA = (nump == 5);
@@ -193,15 +193,15 @@ bool flif_decode_scanlines_inner(IO &io, Rac &rac, std::vector<Coder> &coders, I
         if (p>=nump) continue;
         i++;
         Properties properties((nump>3?NB_PROPERTIES_scanlinesA[p]:NB_PROPERTIES_scanlines[p]));
-        if ((100*pixels_done > options.quality*pixels_todo)) {
-          v_printf(5,"%lu subpixels done, %lu subpixels todo, quality target %i%% reached (%i%%)\n",(long unsigned)pixels_done,(long unsigned)pixels_todo,(int)options.quality,(int)(100*pixels_done/pixels_todo));
+        if ((100*progress.pixels_done > options.quality*progress.pixels_todo)) {
+          v_printf(5,"%lu subpixels done, %lu subpixels todo, quality target %i%% reached (%i%%)\n",(long unsigned)progress.pixels_done,(long unsigned)progress.pixels_todo,(int)options.quality,(int)(100*progress.pixels_done/progress.pixels_todo));
           return false;
         }
         if (ranges->min(p) < ranges->max(p)) {
           const ColorVal minP = ranges->min(p);
-          v_printf_tty(2,"\r%i%% done [%i/%i] DEC[%ux%u]    ",(int)(100*pixels_done/pixels_todo),i,nump,images[0].cols(),images[0].rows());
+          v_printf_tty(2,"\r%i%% done [%i/%i] DEC[%ux%u]    ",(int)(100*progress.pixels_done/progress.pixels_todo),i,nump,images[0].cols(),images[0].rows());
           v_printf_tty(4,"\n");
-          pixels_done += images[0].cols()*images[0].rows();
+          progress.pixels_done += images[0].cols()*images[0].rows();
           for (uint32_t r = 0; r < images[0].rows(); r++) {
             if (images[0].cols() == 0) return false; // decode aborted
             for (int fr=0; fr< (int)images.size(); fr++) {
@@ -223,8 +223,8 @@ bool flif_decode_scanlines_inner(IO &io, Rac &rac, std::vector<Coder> &coders, I
                 }
             }
           }
-          int qual = 10000*pixels_done/pixels_todo;
-          if (callback && p != 4 && qual >= progressive_qual_target) {
+          int qual = progress.quality();
+          if (callback && p != 4 && qual >= progress.progressive_qual_target) {
             auto populatePartialImages = [&] () {
               for (unsigned int n=0; n < images.size(); n++) partial_images[n] = images[n].clone(); // make a copy to work with
               for (int i=transforms.size()-1; i>=0; i--) if (transforms[i]->undo_redo_during_decode()) transforms[i]->invData(partial_images);
@@ -232,9 +232,9 @@ bool flif_decode_scanlines_inner(IO &io, Rac &rac, std::vector<Coder> &coders, I
                 downsample(partial_images[0].cols(), partial_images[0].rows(), options.resize_width, options.resize_height, partial_images);
               }
             };
-            progressive_qual_shown = qual;
-            progressive_qual_target = issue_callback(callback, user_data, qual, io.ftell(), false, populatePartialImages);
-            if (qual >= progressive_qual_target) return false;
+            progress.progressive_qual_shown = qual;
+            progress.progressive_qual_target = issue_callback(callback, user_data, qual, io.ftell(), qual == 10000, populatePartialImages);
+            if (qual >= progress.progressive_qual_target) return false;
           }
         }
     }
@@ -243,7 +243,7 @@ bool flif_decode_scanlines_inner(IO &io, Rac &rac, std::vector<Coder> &coders, I
 
 template<typename IO, typename Rac, typename Coder>
 bool flif_decode_scanlines_pass(IO& io, Rac &rac, Images &images, const ColorRanges *ranges, std::vector<Tree> &forest, flif_options &options,
-                                std::vector<Transform<IO>*> &transforms, callback_t callback, void *user_data, Images &partial_images) {
+                                std::vector<Transform<IO>*> &transforms, callback_t callback, void *user_data, Images &partial_images, Progress &progress) {
     std::vector<Coder> coders;
     coders.reserve(images[0].numPlanes());
     for (int p = 0; p < images[0].numPlanes(); p++) {
@@ -251,7 +251,7 @@ bool flif_decode_scanlines_pass(IO& io, Rac &rac, Images &images, const ColorRan
         initPropRanges_scanlines(propRanges, *ranges, p);
         coders.emplace_back(rac, propRanges, forest[p], 0, options.cutoff, options.alpha);
     }
-    return flif_decode_scanlines_inner<IO,Rac,Coder>(io, rac, coders, images, ranges, options, transforms, callback, user_data, partial_images);
+    return flif_decode_scanlines_inner<IO,Rac,Coder>(io, rac, coders, images, ranges, options, transforms, callback, user_data, partial_images, progress);
 }
 
 template<typename IO>
@@ -349,7 +349,7 @@ void flif_decode_FLIF2_inner_interpol(Images &images, const ColorRanges *ranges,
           uint32_t cols = image.cols(z);
           for (uint32_t r = 0; r < rows; r++) {
             for (uint32_t c = 1; c < cols; c += 2) {
-              plane.set(z,r,c, predict_plane_vertical(plane,z,p,r,c,rows,0));
+              plane.set(z,r,c, predict_plane_vertical(plane,z,p,r,c,cols,0));
             }
           }
         }
@@ -609,8 +609,9 @@ struct vertical_plane_decoder: public PlaneVisitor {
 };
 
 template<typename IO, typename Rac, typename Coder, typename alpha_t, typename ranges_t>
-bool flif_decode_FLIF2_inner_horizontal(const int p, IO& io, Rac &rac, std::vector<Coder> &coders, Images &images, const ranges_t *ranges,
-                             const int beginZL, const int endZL, int quality, int scale, const int i, const int z, const int predictor, std::vector<int>& zoomlevels, std::vector<Transform<IO>*> &transforms, const int invisible_predictor) {
+bool flif_decode_FLIF2_inner_horizontal(const int p, IO& io, FLIF_UNUSED(Rac &rac), std::vector<Coder> &coders, Images &images, const ranges_t *ranges,
+                             const int beginZL, const int endZL, FLIF_UNUSED(int quality), int scale, const int i, const int z, const int predictor, std::vector<int>& zoomlevels, 
+                             std::vector<Transform<IO>*> &transforms, const int invisible_predictor, Progress& progress) {
     const int nump = images[0].numPlanes();
     const bool alphazero = images[0].alpha_zero_special;
     const bool FRA = (nump == 5);
@@ -618,8 +619,8 @@ bool flif_decode_FLIF2_inner_horizontal(const int p, IO& io, Rac &rac, std::vect
     horizontal_plane_decoder<Coder,alpha_t,ranges_t> rowdecoder(coders[p],images,ranges,properties,z,alphazero,FRA, predictor, invisible_predictor,p);
           for (uint32_t r = 1; r < images[0].rows(z); r += 2) {
             if (images[0].cols() == 0) return false; // decode aborted
-            pixels_done += images[0].cols(z);
-            if (endZL == 0 && (r & 257)==257) v_printf_tty(3,"\r%i%% done [%i/%i] DEC[%i,%ux%u]  ",(int)(100*pixels_done/pixels_todo),i,plane_zoomlevels(images[0], beginZL, endZL)-1,p,images[0].cols(z),images[0].rows(z));
+            progress.pixels_done += images[0].cols(z);
+            if (endZL == 0 && (r & 257)==257) v_printf_tty(3,"\r%i%% done [%i/%i] DEC[%i,%ux%u]  ",(int)(100*progress.pixels_done/progress.pixels_todo),i,plane_zoomlevels(images[0], beginZL, endZL)-1,p,images[0].cols(z),images[0].rows(z));
 #ifdef CHECK_FOR_BROKENFILES
             if (io.isEOF()) {
               v_printf(1,"Row %i: Unexpected file end. Interpolation from now on.\n",r);
@@ -640,8 +641,9 @@ bool flif_decode_FLIF2_inner_horizontal(const int p, IO& io, Rac &rac, std::vect
           return true;
 }
 template<typename IO, typename Rac, typename Coder, typename alpha_t, typename ranges_t>
-bool flif_decode_FLIF2_inner_vertical(const int p, IO& io, Rac &rac, std::vector<Coder> &coders, Images &images, const ranges_t *ranges,
-                             const int beginZL, const int endZL, int quality, int scale, const int i, const int z, const int predictor, std::vector<int>& zoomlevels, std::vector<Transform<IO>*> &transforms, const int invisible_predictor) {
+bool flif_decode_FLIF2_inner_vertical(const int p, IO& io, FLIF_UNUSED(Rac &rac), std::vector<Coder> &coders, Images &images, const ranges_t *ranges,
+                             const int beginZL, const int endZL, FLIF_UNUSED(int quality), int scale, const int i, const int z, const int predictor, std::vector<int>& zoomlevels, 
+                             std::vector<Transform<IO>*> &transforms, const int invisible_predictor, Progress &progress) {
     const int nump = images[0].numPlanes();
     const bool alphazero = images[0].alpha_zero_special;
     const bool FRA = (nump == 5);
@@ -649,8 +651,8 @@ bool flif_decode_FLIF2_inner_vertical(const int p, IO& io, Rac &rac, std::vector
     vertical_plane_decoder<Coder,alpha_t,ranges_t> rowdecoder(coders[p],images,ranges,properties,z,alphazero,FRA, predictor, invisible_predictor,p);
           for (uint32_t r = 0; r < images[0].rows(z); r++) {
             if (images[0].cols() == 0) return false; // decode aborted
-            pixels_done += images[0].cols(z)/2;
-            if (endZL == 0 && (r&513)==513) v_printf_tty(3,"\r%i%% done [%i/%i] DEC[%i,%ux%u]  ",(int)(100*pixels_done/pixels_todo),i,plane_zoomlevels(images[0], beginZL, endZL)-1,p,images[0].cols(z),images[0].rows(z));
+            progress.pixels_done += images[0].cols(z)/2;
+            if (endZL == 0 && (r&513)==513) v_printf_tty(3,"\r%i%% done [%i/%i] DEC[%i,%ux%u]  ",(int)(100*progress.pixels_done/progress.pixels_todo),i,plane_zoomlevels(images[0], beginZL, endZL)-1,p,images[0].cols(z),images[0].rows(z));
 #ifdef CHECK_FOR_BROKENFILES
             if (io.isEOF()) {
               v_printf(1,"Row %i: Unexpected file end. Interpolation from now on.\n", r);
@@ -675,7 +677,7 @@ bool flif_decode_FLIF2_inner_vertical(const int p, IO& io, Rac &rac, std::vector
 template<typename IO, typename Rac, typename Coder, typename ranges_t>
 bool flif_decode_FLIF2_inner(IO& io, Rac &rac, std::vector<Coder> &coders, Images &images, const ranges_t *ranges,
                              const int beginZL, const int endZL, flif_options &options, std::vector<Transform<IO>*> &transforms,
-                             callback_t callback, void *user_data, Images &partial_images) {
+                             callback_t callback, void *user_data, Images &partial_images, Progress &progress) {
     const int nump = images[0].numPlanes();
     int quality=options.quality, scale=options.scale;
 //    const bool alphazero = images[0].alpha_zero_special;
@@ -708,8 +710,8 @@ bool flif_decode_FLIF2_inner(IO& io, Rac &rac, std::vector<Coder> &coders, Image
       }
       int z = zoomlevels[p];
       if (z < 0) {e_printf("Corrupt file: invalid plane/zoomlevel\n"); return false;}
-      if (100*pixels_done > quality*pixels_todo && endZL==0) {
-              v_printf(5,"%lu subpixels done, %lu subpixels todo, quality target %i%% reached (%i%%)\n",(long unsigned)pixels_done,(long unsigned)pixels_todo,(int)quality,(int)(100*pixels_done/pixels_todo));
+      if (100*progress.pixels_done > quality*progress.pixels_todo && endZL==0) {
+              v_printf(5,"%lu subpixels done, %lu subpixels todo, quality target %i%% reached (%i%%)\n",(long unsigned)progress.pixels_done,(long unsigned)progress.pixels_todo,(int)quality,(int)(100*progress.pixels_done/progress.pixels_todo));
               flif_decode_FLIF2_inner_interpol(images, ranges, p, endZL, -1, scale, zoomlevels, transforms);
               return false;
       }
@@ -724,11 +726,11 @@ bool flif_decode_FLIF2_inner(IO& io, Rac &rac, std::vector<Coder> &coders, Image
             if (options.no_full_decode && breakpoints < 2) return false;
         }
         if (1<<(z/2) < scale) {
-              v_printf(5,"%lu subpixels done (out of %lu subpixels at this scale), scale target 1:%i reached\n",(long unsigned)pixels_done,(long unsigned)pixels_todo,scale);
+              v_printf(5,"%lu subpixels done (out of %lu subpixels at this scale), scale target 1:%i reached\n",(long unsigned)progress.pixels_done,(long unsigned)progress.pixels_todo,scale);
               flif_decode_FLIF2_inner_interpol(images, ranges, p, endZL, -1, scale, zoomlevels, transforms);
               return false;
         }
-        if (endZL == 0) v_printf_tty(2,"\r%i%% done [%i/%i] DEC[%i,%ux%u]  ",(int)(100*pixels_done/pixels_todo),i,plane_zoomlevels(images[0], beginZL, endZL)-1,p,images[0].cols(z),images[0].rows(z));
+        v_printf_tty((endZL==0?2:10),"\r%i%% done [%i/%i] DEC[%i,%ux%u]  ",(int)(100*progress.pixels_done/progress.pixels_todo),i,plane_zoomlevels(images[0], beginZL, endZL)-1,p,images[0].cols(z),images[0].rows(z));
         for (Image& image : images) { image.getPlane(p).prepare_zoomlevel(z); }
         if (p>0) for (Image& image : images) { image.getPlane(0).prepare_zoomlevel(z); }
         if (p<3 && nump>3) for (Image& image : images) { image.getPlane(3).prepare_zoomlevel(z); }
@@ -736,14 +738,14 @@ bool flif_decode_FLIF2_inner(IO& io, Rac &rac, std::vector<Coder> &coders, Image
 //        ConstantPlane null_alpha(1);
 //        GeneralPlane &alpha = nump > 3 ? images[0].getPlane(3) : null_alpha;
         if (z % 2 == 0) {
-                if (images[0].getDepth() <= 8) { if (!flif_decode_FLIF2_inner_horizontal<IO,Rac,Coder,Plane<ColorVal_intern_8>,ranges_t>(p,io, rac, coders, images, ranges, beginZL, endZL, quality, scale, i, z, predictor, zoomlevels, transforms, options.invisible_predictor)) return false;}
+                if (images[0].getDepth() <= 8) { if (!flif_decode_FLIF2_inner_horizontal<IO,Rac,Coder,Plane<ColorVal_intern_8>,ranges_t>(p,io, rac, coders, images, ranges, beginZL, endZL, quality, scale, i, z, predictor, zoomlevels, transforms, options.invisible_predictor, progress)) return false;}
 #ifdef SUPPORT_HDR
-                else if (images[0].getDepth() > 8) { if (!flif_decode_FLIF2_inner_horizontal<IO,Rac,Coder,Plane<ColorVal_intern_16u>,ranges_t>(p,io, rac, coders, images, ranges, beginZL, endZL, quality, scale, i, z, predictor, zoomlevels, transforms, options.invisible_predictor)) return false; }
+                else if (images[0].getDepth() > 8) { if (!flif_decode_FLIF2_inner_horizontal<IO,Rac,Coder,Plane<ColorVal_intern_16u>,ranges_t>(p,io, rac, coders, images, ranges, beginZL, endZL, quality, scale, i, z, predictor, zoomlevels, transforms, options.invisible_predictor, progress)) return false; }
 #endif
         } else {
-                if (images[0].getDepth() <= 8) { if (!flif_decode_FLIF2_inner_vertical<IO,Rac,Coder,Plane<ColorVal_intern_8>,ranges_t>(p,io, rac, coders, images, ranges, beginZL, endZL, quality, scale, i, z, predictor, zoomlevels, transforms, options.invisible_predictor)) return false;}
+                if (images[0].getDepth() <= 8) { if (!flif_decode_FLIF2_inner_vertical<IO,Rac,Coder,Plane<ColorVal_intern_8>,ranges_t>(p,io, rac, coders, images, ranges, beginZL, endZL, quality, scale, i, z, predictor, zoomlevels, transforms, options.invisible_predictor, progress)) return false;}
 #ifdef SUPPORT_HDR
-                else if (images[0].getDepth() > 8) { if (!flif_decode_FLIF2_inner_vertical<IO,Rac,Coder,Plane<ColorVal_intern_16u>,ranges_t>(p,io, rac, coders, images, ranges, beginZL, endZL, quality, scale, i, z, predictor, zoomlevels, transforms, options.invisible_predictor)) return false;}
+                else if (images[0].getDepth() > 8) { if (!flif_decode_FLIF2_inner_vertical<IO,Rac,Coder,Plane<ColorVal_intern_16u>,ranges_t>(p,io, rac, coders, images, ranges, beginZL, endZL, quality, scale, i, z, predictor, zoomlevels, transforms, options.invisible_predictor, progress)) return false;}
 #endif
 
         }
@@ -752,8 +754,8 @@ bool flif_decode_FLIF2_inner(IO& io, Rac &rac, std::vector<Coder> &coders, Image
           v_printf(5,"\n");
         }
         zoomlevels[p]--;
-        int qual = 10000*pixels_done/pixels_todo;
-        if (callback && p<4 && (endZL==0 || i+1 == plane_zoomlevels(images[0], beginZL, endZL)) && qual >= progressive_qual_target) {
+        int qual = progress.quality();
+        if (callback && p<4 && (endZL==0 || i+1 == plane_zoomlevels(images[0], beginZL, endZL)) && qual >= progress.progressive_qual_target) {
           auto populatePartialImages = [&] () {
             std::unique_ptr<bool[]> skipInterpolate(new bool[ranges->numPlanes()]);
             for (int pn = 0; pn < ranges->numPlanes(); pn++) {
@@ -783,13 +785,13 @@ bool flif_decode_FLIF2_inner(IO& io, Rac &rac, std::vector<Coder> &coders, Image
               }
             }
 
-            int64_t pixels_really_done = pixels_done;
+            int64_t pixels_really_done = progress.pixels_done;
 
             flif_decode_FLIF2_inner_interpol(partial_images, rangesCopy, 0, endZL, -1, scale, zoomlevels_copy, transforms_copy);
             if (endZL>0) {
               flif_decode_FLIF2_inner_interpol(partial_images, rangesCopy, 0, 0, -1, scale, zoomlevels_copy, transforms_copy);
             }
-            pixels_done = pixels_really_done;
+            progress.pixels_done = pixels_really_done;
             for (Image& image : partial_images) {
               image.normalize_scale();
             }
@@ -807,9 +809,9 @@ bool flif_decode_FLIF2_inner(IO& io, Rac &rac, std::vector<Coder> &coders, Image
 
           };
 
-          progressive_qual_shown = qual;
-          progressive_qual_target = issue_callback(callback, user_data, qual, io.ftell(), false, populatePartialImages);
-          if (qual >= progressive_qual_target) return false;
+          progress.progressive_qual_shown = qual;
+          progress.progressive_qual_target = issue_callback(callback, user_data, qual, io.ftell(), qual == 10000, populatePartialImages);
+          if (qual >= progress.progressive_qual_target) return false;
         }
       } else zoomlevels[p]--;
     }
@@ -819,7 +821,7 @@ bool flif_decode_FLIF2_inner(IO& io, Rac &rac, std::vector<Coder> &coders, Image
 template<typename IO, typename Rac, typename Coder>
 bool flif_decode_FLIF2_pass(IO &io, Rac &rac, Images &images, const ColorRanges *ranges, std::vector<Tree> &forest,
                             const int beginZL, const int endZL, flif_options &options, std::vector<Transform<IO>*> &transforms,
-                            callback_t callback, void *user_data, Images &partial_images) {
+                            callback_t callback, void *user_data, Images &partial_images, Progress &progress) {
     std::vector<Coder> coders;
     coders.reserve(images[0].numPlanes());
     for (int p = 0; p < images[0].numPlanes(); p++) {
@@ -838,7 +840,7 @@ bool flif_decode_FLIF2_pass(IO &io, Rac &rac, Images &images, const ColorRanges 
              const int minR = ranges->min(p);
              image.set(p,0,0,0, metaCoder.read_int(minR, ranges->max(p) - minR));
           }
-          pixels_done++;
+          progress.pixels_done++;
         }
       }
     }
@@ -850,12 +852,12 @@ bool flif_decode_FLIF2_pass(IO &io, Rac &rac, Images &images, const ColorRanges 
         return flif_decode_FLIF2_inner<IO,Rac,Coder,ColorRangesBounds>(io, rac, coders, images, rangesB, beginZL, endZL, options, transforms, callback, user_data, partial_images);
     else
 #endif
-        return flif_decode_FLIF2_inner<IO,Rac,Coder,ColorRanges>(io, rac, coders, images, ranges, beginZL, endZL, options, transforms, callback, user_data, partial_images);
+        return flif_decode_FLIF2_inner<IO,Rac,Coder,ColorRanges>(io, rac, coders, images, ranges, beginZL, endZL, options, transforms, callback, user_data, partial_images, progress);
 }
 
 
 
-template<typename IO, typename BitChance, typename Rac> bool flif_decode_tree(IO& io, Rac &rac, const ColorRanges *ranges, std::vector<Tree> &forest, const flifEncoding encoding)
+template<typename IO, typename BitChance, typename Rac> bool flif_decode_tree(FLIF_UNUSED(IO& io), Rac &rac, const ColorRanges *ranges, std::vector<Tree> &forest, const flifEncoding encoding)
 {
     try {
       for (int p = 0; p < ranges->numPlanes(); p++) {
@@ -867,7 +869,7 @@ template<typename IO, typename BitChance, typename Rac> bool flif_decode_tree(IO
         if (!metacoder.read_tree(forest[p])) {return false;}
 //        forest[p].print(stdout);
       }
-    } catch (std::bad_alloc& ba) {
+    } catch (std::bad_alloc&) {
         e_printf("Error: could not allocate enough memory for MANIAC trees.\n");
         return false;
       }
@@ -876,7 +878,7 @@ template<typename IO, typename BitChance, typename Rac> bool flif_decode_tree(IO
 
 template <int bits, typename IO>
 bool flif_decode_main(RacIn<IO>& rac, IO& io, Images &images, const ColorRanges *ranges,
-        std::vector<Transform<IO>*> &transforms, flif_options &options, callback_t callback, void *user_data, Images &partial_images) {
+        std::vector<Transform<IO>*> &transforms, flif_options &options, callback_t callback, void *user_data, Images &partial_images, Progress &progress) {
     int scale=options.scale;
     std::vector<Tree> forest(ranges->numPlanes(), Tree());
     int roughZL = 0;
@@ -886,17 +888,17 @@ bool flif_decode_main(RacIn<IO>& rac, IO& io, Images &images, const ColorRanges 
       UniformSymbolCoder<RacIn<IO>> metaCoder(rac);
       roughZL = metaCoder.read_int(0,images[0].zooms());
 //      v_printf(2,"Decoding rough data\n");
-      if (!flif_decode_FLIF2_pass<IO, RacIn<IO>, FinalPropertySymbolCoder<FLIFBitChancePass2, RacIn<IO>, bits> >(io, rac, images, ranges, forest, images[0].zooms(), roughZL+1, options, transforms, callback, user_data, partial_images)) {
+      if (!flif_decode_FLIF2_pass<IO, RacIn<IO>, FinalPropertySymbolCoder<FLIFBitChancePass2, RacIn<IO>, bits> >(io, rac, images, ranges, forest, images[0].zooms(), roughZL+1, options, transforms, callback, user_data, partial_images, progress)) {
         std::vector<int> zoomlevels(ranges->numPlanes(),roughZL);
         flif_decode_FLIF2_inner_interpol(images, ranges, 0, 0, -1, scale, zoomlevels, transforms);
         return false;
       }
     }
-    if (options.method.encoding == flifEncoding::interlaced && (options.quality <= 0 || pixels_done >= pixels_todo) && pixels_todo > 1) {
-      v_printf(3,"Not decoding MANIAC tree (%i pixels done, had %i pixels to do)\n", pixels_done, pixels_todo);
+    if (options.method.encoding == flifEncoding::interlaced && (options.quality <= 0 || progress.pixels_done >= progress.pixels_todo) && progress.pixels_todo > 1) {
+      v_printf(3,"Not decoding MANIAC tree (%i pixels done, had %i pixels to do)\n", progress.pixels_done, progress.pixels_todo);
       std::vector<int> zoomlevels(ranges->numPlanes(),roughZL);
       flif_decode_FLIF2_inner_interpol(images, ranges, 0, 0, -1, scale, zoomlevels, transforms);
-      return pixels_done >= pixels_todo;
+      return progress.pixels_done >= progress.pixels_todo;
     } else {
       v_printf(3,"Decoded header + rough data. Decoding MANIAC tree.\n");
       if (!flif_decode_tree<IO, FLIFBitChanceTree, RacIn<IO>>(io, rac, ranges, forest, options.method.encoding)) {
@@ -911,10 +913,10 @@ bool flif_decode_main(RacIn<IO>& rac, IO& io, Images &images, const ColorRanges 
 
     switch(options.method.encoding) {
         case flifEncoding::nonInterlaced: v_printf(3,"Decoding data (scanlines)\n");
-                return flif_decode_scanlines_pass<IO, RacIn<IO>, FinalPropertySymbolCoder<FLIFBitChancePass2, RacIn<IO>, bits> >(io, rac, images, ranges, forest, options, transforms, callback, user_data, partial_images);
+                return flif_decode_scanlines_pass<IO, RacIn<IO>, FinalPropertySymbolCoder<FLIFBitChancePass2, RacIn<IO>, bits> >(io, rac, images, ranges, forest, options, transforms, callback, user_data, partial_images, progress);
                 break;
         case flifEncoding::interlaced: v_printf(3,"Decoding data (interlaced)\n");
-                return flif_decode_FLIF2_pass<IO, RacIn<IO>, FinalPropertySymbolCoder<FLIFBitChancePass2, RacIn<IO>, bits> >(io, rac, images, ranges, forest, roughZL, 0, options, transforms, callback, user_data, partial_images);
+                return flif_decode_FLIF2_pass<IO, RacIn<IO>, FinalPropertySymbolCoder<FLIFBitChancePass2, RacIn<IO>, bits> >(io, rac, images, ranges, forest, roughZL, 0, options, transforms, callback, user_data, partial_images, progress);
                 break;
     }
     return false;
@@ -925,7 +927,7 @@ size_t read_big_endian_varint(IO& io) {
     size_t result = 0;
     int bytes_read = 0;
     while (bytes_read++ < 10) {
-      int number = io.getc();
+      int number = io.get_c();
       if (number < 0) break;
       if (number < 128) return result+number;
       number -= 128;
@@ -938,7 +940,7 @@ size_t read_big_endian_varint(IO& io) {
 
 template <typename IO>
 int read_chunk(IO& io, MetaData& metadata) {
-    metadata.name[0] = io.getc();
+    metadata.name[0] = io.get_c();
 //    printf("chunk: %s\n", metadata.name);
     if (metadata.name[0] < 32) {
       if (metadata.name[0] > 0) {
@@ -958,7 +960,7 @@ int read_chunk(IO& io, MetaData& metadata) {
 //    printf("chunk length: %lu\n", metadata.length);
     metadata.contents.resize(metadata.length);
     for(size_t i = 0; i < metadata.length; i++) {
-        metadata.contents[i] = io.getc();
+        metadata.contents[i] = io.get_c();
     }
     return 0; // read next chunk
 }
@@ -1036,6 +1038,10 @@ bool flif_decode(IO& io, Images &images, callback_t callback, void *user_data, i
     if (width < 1 || height < 1) {e_printf("Invalid FLIF header\n"); return false;}
 
     if (numFrames > 1) numFrames = read_big_endian_varint(io)+2;
+    if (numFrames < 0) {
+        e_printf("Unsensical number of frames < 0.\n");
+        return false;
+    }
 #ifndef SUPPORT_ANIMATION
     if (numFrames > 1) {
         e_printf("This FLIF cannot decode animations. Please compile with SUPPORT_ANIMATION.\n");
@@ -1073,7 +1079,7 @@ bool flif_decode(IO& io, Images &images, callback_t callback, void *user_data, i
 //    }
 
 //    image.init(width, height, 0, 0, 0);
-    v_printf(3,"Decoding %ux%u image, channels:",width,height);
+    v_printf(3,"Decoding %ix%i image, channels:",width,height);
     int maxmax=0;
     for (int p = 0; p < numPlanes; p++) {
 //        int min = 0;
@@ -1167,7 +1173,7 @@ bool flif_decode(IO& io, Images &images, callback_t callback, void *user_data, i
     for (int i=0; i<numFrames; i++) {
       try {
       images.push_back(Image(scale_shift));
-      } catch (std::bad_alloc& ba) {
+      } catch (std::bad_alloc&) {
         e_printf("Couldn't allocate enough memory for all frames. Aborting.\n");
         return false;
       }
@@ -1253,12 +1259,13 @@ bool flif_decode(IO& io, Images &images, callback_t callback, void *user_data, i
 
     int realnumplanes = 0;
     for (int i=0; i<ranges->numPlanes(); i++) if (ranges->min(i)<ranges->max(i)) realnumplanes++;
-    pixels_todo = (int64_t)width*height*realnumplanes/scale/scale;
-    pixels_done = 0;
-    if (pixels_todo == 0) pixels_todo = pixels_done = 1;
-    progressive_qual_target = first_callback_quality;
-    progressive_qual_shown = -1;
-    v_printf(9,"%lu subpixels done, %lu subpixels todo, quality target %i%%\n",(long unsigned)pixels_done,(long unsigned)pixels_todo,(int)quality);
+    Progress progress;
+    progress.pixels_todo = (long unsigned)width*height*realnumplanes/scale/scale;
+    progress.pixels_done = 0;
+    if (progress.pixels_todo == 0) progress.pixels_todo = progress.pixels_done = 1;
+    progress.progressive_qual_target = first_callback_quality;
+    progress.progressive_qual_shown = -1;
+    v_printf(9,"%lu subpixels done (%i channels), %lu subpixels todo, quality target %i%%\n",(long unsigned)progress.pixels_done,realnumplanes,(long unsigned)progress.pixels_todo,(int)quality);
 
     for (int p = 0; p < ranges->numPlanes(); p++) {
       v_printf(10,"Plane %i: %i..%i\n",p,ranges->min(p),ranges->max(p));
@@ -1308,10 +1315,10 @@ bool flif_decode(IO& io, Images &images, callback_t callback, void *user_data, i
 #endif
     bool fully_decoded;
     if (bits == 10) {
-       fully_decoded = flif_decode_main<10>(rac, io, images, ranges, transform_ptrs, options, callback, user_data, partial_images);
+       fully_decoded = flif_decode_main<10>(rac, io, images, ranges, transform_ptrs, options, callback, user_data, partial_images, progress);
 #ifdef SUPPORT_HDR
     } else {
-       fully_decoded = flif_decode_main<18>(rac, io, images, ranges, transform_ptrs, options, callback, user_data, partial_images);
+       fully_decoded = flif_decode_main<18>(rac, io, images, ranges, transform_ptrs, options, callback, user_data, partial_images, progress);
 #endif
     }
 
@@ -1353,7 +1360,7 @@ bool flif_decode(IO& io, Images &images, callback_t callback, void *user_data, i
           transform_ptrs.back()->invData(palette);
           transform_ptrs.pop_back();
         }
-        Image *p_image = new Image(palette[0].clone());
+        std::shared_ptr<Image> p_image = std::make_shared<Image>(palette[0].clone());
         for (Image& i : images) i.palette_image = p_image;
       }
     }
@@ -1398,12 +1405,12 @@ bool flif_decode(IO& io, Images &images, callback_t callback, void *user_data, i
     }
 
     // ensure that the callback gets called even if the image is completely constant
-    if (progressive_qual_target > 10000) progressive_qual_target = 10000;
-    if (callback && progressive_qual_target > progressive_qual_shown) {
+    if (progress.progressive_qual_target > 10000) progress.progressive_qual_target = 10000;
+    if (callback && progress.progressive_qual_target > progress.progressive_qual_shown) {
         auto populatePartialImages = [&] () {
           for (unsigned int n=0; n < images.size(); n++) partial_images[n] = images[n].clone(); // make a copy to work with
         };
-        issue_callback(callback, user_data, 10000*pixels_done/pixels_todo, io.ftell(), true, populatePartialImages);
+        issue_callback(callback, user_data, progress.quality(), io.ftell(), true, populatePartialImages);
     }
 
     if (options.metadata) {

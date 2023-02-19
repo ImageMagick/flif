@@ -19,6 +19,7 @@
 #ifdef HAS_ENCODER
 
 #include "flif-interface-private_enc.hpp"
+#include "flif-interface_common.cpp"
 
 FLIF_ENCODER::FLIF_ENCODER()
 : options(FLIF_DEFAULT_OPTIONS)
@@ -36,6 +37,10 @@ void FLIF_ENCODER::add_image_move(FLIF_IMAGE* image) {
     if (!options.alpha_zero_special) image->image.alpha_zero_special = false;
     images.emplace_back(std::move(image->image)); // variant without cloning, will destroy input image during encoding
     image = NULL;
+}
+
+void FLIF_ENCODER::set_alpha_zero_flags() {
+    for (Image& image : images) image.alpha_zero_special = options.alpha_zero_special;
 }
 
 
@@ -167,9 +172,19 @@ FLIF_DLLEXPORT void FLIF_API flif_encoder_set_min_size(FLIF_ENCODER* encoder, in
 FLIF_DLLEXPORT void FLIF_API flif_encoder_set_split_threshold(FLIF_ENCODER* encoder, int32_t split_threshold) {
     encoder->options.split_threshold = split_threshold;
 }
-FLIF_DLLEXPORT void FLIF_API flif_encoder_set_alpha_zero_lossless(FLIF_ENCODER* encoder) {
-    encoder->options.alpha_zero_special = 0;
+FLIF_DLLEXPORT void FLIF_API flif_encoder_set_alpha_zero(FLIF_ENCODER* encoder, int32_t lossless) {
+    try {
+        encoder->options.alpha_zero_special = (lossless == 0);
+        // change the flag for any images that have already been added
+        encoder->set_alpha_zero_flags();
+    }
+    catch(...) {}
 }
+
+FLIF_DLLIMPORT void FLIF_API flif_encoder_set_alpha_zero_lossless(FLIF_ENCODER* encoder) {
+    flif_encoder_set_alpha_zero(encoder,1); 
+}
+ 
 
 FLIF_DLLEXPORT void FLIF_API flif_encoder_set_crc_check(FLIF_ENCODER* encoder, uint32_t crc_check) {
     encoder->options.crc_check = crc_check;

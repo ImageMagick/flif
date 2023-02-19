@@ -50,9 +50,10 @@
 #define strcasecmp _stricmp
 #endif
 
-
-
-
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 // planes:
 // 0    Y channel (luminance)
@@ -124,13 +125,13 @@ void show_help(int mode) {
     }
 }
 
-
 bool file_exists(const char * filename){
         FILE * file = fopen(filename, "rb");
         if (!file) return false;
         fclose(file);
         return true;
 }
+
 bool file_is_flif(const char * filename){
         FILE * file = fopen(filename, "rb");
         if (!file) return false;
@@ -142,18 +143,18 @@ bool file_is_flif(const char * filename){
         return result;
 }
 
-
-
 void show_banner() {
     v_printf(3,"  ____ _(_)____\n");
-    v_printf(3," (___ | | | ___)   ");v_printf(2,"FLIF (Free Lossless Image Format) 0.3 [28 April 2017]\n");
-    v_printf(3,"  (__ | |_| __)    ");v_printf(3,"Copyright (C) 2017 Jon Sneyers and Pieter Wuille\n");
+    v_printf(3," (___ | | | ___)   ");v_printf(2,"FLIF (Free Lossless Image Format) 0.4 [21 Nov 2021]\n");
+    v_printf(3,"  (__ | |_| __)    ");v_printf(3,"Copyright (C) 2021 Jon Sneyers and Pieter Wuille\n");
     v_printf(3,"    (_|___|_)      ");
 #ifdef HAS_ENCODER
     v_printf(3,"License LGPLv3+: GNU LGPL version 3 or later\n");
 #else
     v_printf(3,"License Apache 2.0 (compiled with decoder only)\n");
 #endif
+    v_printf(3,"\n");
+    v_printf(1,"ATTENTION: FLIF has been obsoleted by JPEG XL, see jpegxl.info for details.\n");
     v_printf(3,"\n");
     v_printf(4,"This is free software: you are free to change and redistribute it.\n");
     v_printf(4,"There is NO WARRANTY, to the extent permitted by law.\n");
@@ -183,6 +184,7 @@ bool check_compatible_extension (char *ext) {
         return true;
     }
 }
+
 bool check_metadata_extension (char *ext) {
     if (!(ext && (
                    !strcasecmp(ext,".icc")
@@ -194,7 +196,6 @@ bool check_metadata_extension (char *ext) {
         return true;
     }
 }
-
 
 #ifdef HAS_ENCODER
 
@@ -268,7 +269,8 @@ bool encode_load_input_images(int argc, char **argv, Images &images, flif_option
     e_printf("Error: no actual input images to be encoded!\n");
     return false;
 }
-bool encode_flif(int argc, char **argv, Images &images, flif_options &options) {
+
+bool encode_flif(FLIF_UNUSED(int argc), char **argv, Images &images, flif_options &options) {
     bool flat=true;
     unsigned int framenb=0;
     for (Image& i : images) { i.frame_delay = options.frame_delay[framenb]; if (framenb+1 < options.frame_delay.size()) framenb++; }
@@ -359,6 +361,7 @@ bool handle_encode(int argc, char **argv, Images &images, flif_options &options)
     argc = 1;
     return encode_flif(argc, argv, images, options);
 }
+
 #endif
 
 bool decode_flif(char **argv, Images &images, flif_options &options) {
@@ -448,6 +451,7 @@ int handle_decode(int argc, char **argv, Images &images, flif_options &options) 
             } else {
               if (!image.save(argv[1])) return 2;
             }
+            v_printf(1,"%ims ",image.frame_delay);
             counter++;
             v_printf(2,"    (%i/%i)         \r",counter,(int)images.size()); v_printf(4,"\n");
         }
@@ -457,10 +461,15 @@ int handle_decode(int argc, char **argv, Images &images, flif_options &options) 
     v_printf(2,"\n");
     return 0;
 }
-int main(int argc, char **argv)
-{
+
+int main(int argc, char **argv) {
     Images images;
     flif_options options = FLIF_DEFAULT_OPTIONS;
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
 #ifdef HAS_ENCODER
     int mode = -1; // 0 = encode, 1 = decode, 2 = transcode
 #else
@@ -742,6 +751,10 @@ int main(int argc, char **argv)
         e_printf("Too many arguments.\n");
         return 1;
     }
+    if (mode == 2 && options.keep_palette) {
+        e_printf("Transcode (-t) does not work with -k as it requires either to be PNG.\n");
+        return 1;
+    }
 
 #ifdef HAS_ENCODER
     if (options.chroma_subsampling)
@@ -763,4 +776,3 @@ int main(int argc, char **argv)
 #endif
     return 0;
 }
-

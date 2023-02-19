@@ -23,7 +23,7 @@ limitations under the License.
 #include "../image/image.hpp"
 #include "../fileio.hpp"
 
-#ifdef _MSC_VER
+#ifdef _WIN32
  #ifdef FLIF_BUILD_DLL
   #define FLIF_DLLEXPORT __declspec(dllexport)
  #else
@@ -46,6 +46,8 @@ struct FLIF_IMAGE
     void write_row_RGB8(uint32_t row, const void* buffer, size_t buffer_size_bytes);
     void write_row_GRAY8(uint32_t row, const void* buffer, size_t buffer_size_bytes);
     void read_row_GRAY8(uint32_t row, void* buffer, size_t buffer_size_bytes);
+    void write_row_GRAY16(uint32_t row, const void* buffer, size_t buffer_size_bytes);
+    void read_row_GRAY16(uint32_t row, void* buffer, size_t buffer_size_bytes);
     void write_row_PALETTE8(uint32_t row, const void* buffer, size_t buffer_size_bytes);
     void read_row_PALETTE8(uint32_t row, void* buffer, size_t buffer_size_bytes);
 
