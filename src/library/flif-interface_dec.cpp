@@ -19,7 +19,6 @@ limitations under the License.
 #include <stdio.h>
 
 #include "flif-interface-private_dec.hpp"
-#include "flif-interface_common.cpp"
 
 #include <functional>
 
