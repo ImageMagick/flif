@@ -1,4 +1,4 @@
-[DLL]
+[DYNAMIC_LIBRARY]
 
 [DISABLED_ARM64]
 
@@ -10,36 +10,31 @@ LICENSE_Apache2
 [DEFINES]
 HAS_ENCODER
 
-[DEFINES_DLL]
+[DYNAMIC_DEFINES]
 FLIF_BUILD_DLL
 
-[DIRECTORIES]
-extern
-src
-src\image
-src\library
-src\maniac
-src\transform
+[INCLUDE_ARTIFACTS]
+src\library -> .
 
 [EXCLUDES]
-flif.cpp
-flif-interface.cpp
-flif-pixbuf-loader.c
-image.cpp
-image-metadata.cpp
-image-pam.cpp
-image-png.cpp
-image-pnm.cpp
-image-rggb.cpp
-viewflif.c
+build\
+raw-tools\
+src\image\image.cpp
+src\image\image-metadata.cpp
+src\image\image-pam.cpp
+src\image\image-png.cpp
+src\image\image-pnm.cpp
+src\image\image-rggb.cpp
+src\library\flif-interface.cpp
+src\flif.cpp
+src\flif-pixbuf-loader.c
+src\viewflif.c
+tools\
 
-[INCLUDES]
-zlib->.
-
-[DEPENDENCIES]
+[REFERENCES]
 zlib
 
-[CONFIG_DEFINE]
+[MAGICK_BASECONFIG_DEFINE]
 /*
   Define to use the FLIF library
 */
