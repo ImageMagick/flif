@@ -4,6 +4,24 @@
 
 [OPTIONAL]
 
+[VERSION]
+0.4.0
+
+[RELEASE_DATE]
+2021-11-21
+
+[PRODUCT_NAME]
+flif
+
+[COMPANY_NAME]
+Jon Sneyers & Pieter Wuille.
+
+[URL]
+https://github.com/FLIF-hub/FLIF
+
+[COPYRIGHT]
+Copyright 2010-2016, Jon Sneyers & Pieter Wuille
+
 [LICENSE_FILE]
 LICENSE_Apache2
 
