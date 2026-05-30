@@ -53,7 +53,7 @@ typedef int32_t ColorVal_intern_32;
 struct FourColorVals {
     __m128i vec;
     FourColorVals() : vec() {}
-    explicit FourColorVals(__m128i &v) : vec(v) {}
+    explicit FourColorVals(const __m128i &v) : vec(v) {}
     explicit FourColorVals(int v) : vec(_mm_set1_epi32(v)) {}
     FourColorVals(int v1, int v2, int v3, int v4): vec(_mm_set_epi32(v1, v2, v3, v4)) {}
     explicit FourColorVals(const int32_t *p) {
@@ -98,7 +98,7 @@ inline FourColorVals VCALL operator>(FourColorVals a, FourColorVals b) { return 
 struct EightColorVals {
     __m128i vec;
     EightColorVals() : vec() {}
-    explicit EightColorVals(__m128i &v) : vec(v) {}
+    explicit EightColorVals(const __m128i &v) : vec(v) {}
     explicit EightColorVals(short v) : vec(_mm_set1_epi16(v)) {}
     EightColorVals(short v8, short v7, short v6, short v5, short v4, short v3, short v2, short v1): vec(_mm_set_epi16(v1, v2, v3, v4, v5, v6, v7, v8)) {}
     explicit EightColorVals(const int16_t *p) {
